@@ -55,11 +55,12 @@ public class Servidor {
                     break;
                 }
             }
-
+            
             saidaCliente.writeUTF("OK");
             System.out.println(nome + " entrou no chat.");
             atualizarUsuarios();
             atualizarGruposParaCliente(socket, nome);
+
             while (true) {
                 String tipo;
                 try {
@@ -99,6 +100,19 @@ public class Servidor {
                     case "CRIAR_GRUPO" -> {
                         String nomeGrupo = entrada.readUTF();
                         if (nomeGrupo.length() > 32) nomeGrupo = nomeGrupo.substring(0, 32);
+
+                        synchronized (grupos) {
+                            if (grupos.containsKey(nomeGrupo)) {
+                                saidaCliente.writeUTF("ALERTA");
+                                saidaCliente.writeUTF("O grupo '" + nomeGrupo + "' já existe.");
+                                int qtdMembrosParaPular = entrada.readInt();
+                                for (int i = 0; i < qtdMembrosParaPular; i++) {
+                                    entrada.readUTF();
+                                }
+                                continue;
+                            }
+                        }
+
                         int qtdMembros = entrada.readInt();
                         if (qtdMembros < 1 || qtdMembros > 100) break;
                         Set<String> membros = new HashSet<>();
@@ -109,6 +123,10 @@ public class Servidor {
                         }
                         membros.add(nome);
                         grupos.put(nomeGrupo, membros);
+                        
+                        saidaCliente.writeUTF("ALERTA");
+                        saidaCliente.writeUTF("Grupo '" + nomeGrupo + "' criado com sucesso!");
+
                         atualizarGrupos();
                         System.out.println("Grupo criado: " + nomeGrupo + " -> " + membros);
                     }
@@ -160,6 +178,9 @@ public class Servidor {
     }
 
     private static void sendPrivate(String remetente, String destinatario, String mensagem) throws IOException {
+        if (remetente.equals(destinatario)) {
+            return;
+        }
         Socket socketDest = clientes.get(destinatario);
         if (socketDest != null) {
             DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
@@ -174,21 +195,22 @@ public class Servidor {
         Set<String> membros = grupos.get(grupo);
         if (membros != null) {
             for (String m : membros) {
-                if (!m.equals(remetente)) {
-                    Socket socketDest = clientes.get(m);
-                    if (socketDest != null) {
-                        DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
-                        saidaDest.writeUTF("MSG");
-                        saidaDest.writeUTF(remetente);
-                        saidaDest.writeUTF("GRUPO:" + grupo);
-                        saidaDest.writeUTF(mensagem);
-                    }
+                Socket socketDest = clientes.get(m);
+                if (socketDest != null) {
+                    DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
+                    saidaDest.writeUTF("MSG");
+                    saidaDest.writeUTF(remetente);
+                    saidaDest.writeUTF("GRUPO:" + grupo);
+                    saidaDest.writeUTF(mensagem);
                 }
             }
         }
     }
 
     private static void sendFile(String remetente, String destinatario, String nomeArquivo, byte[] arquivoBytes) throws IOException {
+        if (remetente.equals(destinatario)) {
+            return;
+        }
         Socket socketDest = clientes.get(destinatario);
         if (socketDest != null) {
             DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
@@ -205,17 +227,15 @@ public class Servidor {
         Set<String> membros = grupos.get(grupo);
         if (membros != null) {
             for (String m : membros) {
-                if (!m.equals(remetente)) {
-                    Socket socketDest = clientes.get(m);
-                    if (socketDest != null) {
-                        DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
-                        saidaDest.writeUTF("FILE");
-                        saidaDest.writeUTF(remetente);
-                        saidaDest.writeUTF("GRUPO:" + grupo);
-                        saidaDest.writeUTF(nomeArquivo);
-                        saidaDest.writeLong(arquivoBytes.length);
-                        saidaDest.write(arquivoBytes);
-                    }
+                Socket socketDest = clientes.get(m);
+                if (socketDest != null) {
+                    DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
+                    saidaDest.writeUTF("FILE");
+                    saidaDest.writeUTF(remetente);
+                    saidaDest.writeUTF("GRUPO:" + grupo);
+                    saidaDest.writeUTF(nomeArquivo);
+                    saidaDest.writeLong(arquivoBytes.length);
+                    saidaDest.write(arquivoBytes);
                 }
             }
         }

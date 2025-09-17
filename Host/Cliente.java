@@ -10,6 +10,7 @@ import java.net.Socket;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Cliente {
 
@@ -23,9 +24,10 @@ public class Cliente {
     private static JFrame framePrincipal;
     private static HashMap<String, JFrame> chatsAbertos = new HashMap<>();
 
+    private static Set<String> unreadMessages = new HashSet<>();
+
     private static JLabel barraStatus = new JLabel("Conectado");
     private static HashMap<String, java.util.List<String>> historicoMensagens = new HashMap<>();
-    private static HashMap<String, Boolean> notificacoesPendentes = new HashMap<>();
 
     public static void main(String[] args) {
         Socket porta = null;
@@ -71,40 +73,31 @@ public class Cliente {
                         case "MSG" -> {
                             String remetente = entrada.readUTF();
                             String destino = entrada.readUTF();
-                            String msg = entrada.readUTF();
+                            String mensagem = entrada.readUTF();
+                            String chaveChat = destino.startsWith("GRUPO:") ? destino : (remetente.equals(nome) ? destino : remetente);
 
-                            if (msg.length() > 2048) msg = msg.substring(0, 2048);
+                            String textoParaHistorico = remetente + ": " + mensagem;
+                            historicoMensagens.computeIfAbsent(chaveChat, k -> new java.util.ArrayList<>()).add(textoParaHistorico);
 
-                            String key;
-                            boolean grupo = false;
-                            if (destino.startsWith("GRUPO:")) {
-                                key = destino;
-                                grupo = true;
-                            } else if (destino.equals("GERAL")) {
-                                key = "GERAL";
-                            } else {
-                                key = remetente;
-                            }
+                            SwingUtilities.invokeLater(() -> {
+                                unreadMessages.add(chaveChat);
+                                framePrincipal.repaint();
 
-                            abrirChat(key, grupo);
+                                JFrame chatFrame = chatsAbertos.get(chaveChat);
+                                if (chatFrame != null) {
+                                    JScrollPane scroll = (JScrollPane) chatFrame.getContentPane().getComponent(0);
+                                    JTextArea areaChat = (JTextArea) scroll.getViewport().getView();
+                                    areaChat.append(textoParaHistorico + "\n");
+                                    areaChat.setCaretPosition(areaChat.getDocument().getLength());
+                                }
 
-                            JFrame chatFrame = chatsAbertos.get(key);
-                            JScrollPane scroll = (JScrollPane) chatFrame.getContentPane().getComponent(0);
-                            JTextArea area = (JTextArea) scroll.getViewport().getView();
-
-                            if (grupo) area.append(remetente + " (grupo " + destino.substring(6) + "): " + msg + "\n");
-                            else if (!destino.equals("GERAL")) area.append(remetente + " : " + msg + "\n");
-                            else area.append(remetente + ": " + msg + "\n");
-
-                            if (!chatsAbertos.containsKey(key) || !chatsAbertos.get(key).isVisible()) {
-                                notificacoesPendentes.put(key, true);
-                                barraStatus.setText("Nova mensagem em " + (grupo ? "grupo " + key.substring(6) : key) + "!");
-                                barraStatus.setBackground(new Color(255, 220, 220));
-                                JOptionPane.showMessageDialog(framePrincipal, "Nova mensagem de " + remetente + "!", "Notificação", JOptionPane.INFORMATION_MESSAGE);
-                            } else {
-                                barraStatus.setText("Conectado");
-                                barraStatus.setBackground(new Color(230, 240, 255));
-                            }
+                                if (!framePrincipal.isFocused()) {
+                                    String popupMsg = chaveChat.startsWith("GRUPO:") ? 
+                                        "Nova mensagem no grupo " + chaveChat.substring(6) : 
+                                        "Nova mensagem de " + remetente;
+                                    mostrarPopupNotificacao(popupMsg);
+                                }
+                            });
                         }
                         case "FILE" -> {
                             String remetente = entrada.readUTF();
@@ -124,7 +117,10 @@ public class Cliente {
                                 arquivoRecebido = new File("recebido_" + tentativas + "_" + nomeArquivo);
                                 tentativas++;
                             }
-                            FileOutputStream fos = new FileOutputStream(arquivoRecebido);
+                            
+                            final File finalArquivoRecebido = arquivoRecebido;
+                            
+                            FileOutputStream fos = new FileOutputStream(finalArquivoRecebido);
                             byte[] buffer = new byte[4096];
                             long restante = tamanho;
                             while (restante > 0) {
@@ -144,13 +140,29 @@ public class Cliente {
                                 key = "GERAL";
                             } else key = remetente;
 
-                            abrirChat(key, grupo);
-                            JFrame chatFrame = chatsAbertos.get(key);
-                            JScrollPane scroll = (JScrollPane) chatFrame.getContentPane().getComponent(0);
-                            JTextArea area = (JTextArea) scroll.getViewport().getView();
+                            final boolean finalGrupo = grupo;
 
-                            if (grupo) area.append(remetente + " enviou arquivo no grupo " + destino.substring(6) + ": " + arquivoRecebido.getName() + "\n");
-                            else area.append(remetente + " enviou arquivo : " + arquivoRecebido.getName() + "\n");
+                            String msgArquivo = (finalGrupo ? remetente + " enviou arquivo" : remetente + " enviou arquivo") + ": " + finalArquivoRecebido.getName();
+                            historicoMensagens.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(msgArquivo);
+
+                            SwingUtilities.invokeLater(() -> {
+                                unreadMessages.add(key);
+                                framePrincipal.repaint();
+
+                                JFrame chatFrame = chatsAbertos.get(key);
+                                if (chatFrame != null) {
+                                    JScrollPane scroll = (JScrollPane) chatFrame.getContentPane().getComponent(0);
+                                    JTextArea area = (JTextArea) scroll.getViewport().getView();
+                                    area.append(msgArquivo + "\n");
+
+                                    if (!framePrincipal.isFocused()) {
+                                        String popupMsg = key.startsWith("GRUPO:") ?
+                                            "Novo arquivo no grupo " + key.substring(6) :
+                                            "Novo arquivo de " + remetente;
+                                        mostrarPopupNotificacao(popupMsg);
+                                    }
+                                }
+                            });
                         }
                         case "USERS" -> {
                             int qtd = entrada.readInt();
@@ -180,6 +192,12 @@ public class Cliente {
                             SwingUtilities.invokeLater(() -> {
                                 modeloGrupos.clear();
                                 for (String g : novosGrupos) modeloGrupos.addElement(g);
+                            });
+                        }
+                        case "ALERTA" -> {
+                            String msg = entrada.readUTF();
+                            SwingUtilities.invokeLater(() -> {
+                                JOptionPane.showMessageDialog(framePrincipal, msg, "Aviso do Servidor", JOptionPane.PLAIN_MESSAGE);
                             });
                         }
                     }
@@ -218,12 +236,14 @@ public class Cliente {
         listaUsuarios.setBorder(BorderFactory.createTitledBorder("Usuários"));
         listaUsuarios.setFont(new Font("Segoe UI", Font.PLAIN, 16));
         listaUsuarios.setSelectionBackground(new Color(200, 220, 255));
+        listaUsuarios.setCellRenderer(new UnreadMessageRenderer());
         listas.add(new JScrollPane(listaUsuarios));
 
         JList<String> listaGrupos = new JList<>(modeloGrupos);
         listaGrupos.setBorder(BorderFactory.createTitledBorder("Grupos"));
         listaGrupos.setFont(new Font("Segoe UI", Font.PLAIN, 16));
         listaGrupos.setSelectionBackground(new Color(220, 200, 255));
+        listaGrupos.setCellRenderer(new UnreadMessageRenderer());
         listas.add(new JScrollPane(listaGrupos));
 
         framePrincipal.add(listas, BorderLayout.CENTER);
@@ -285,7 +305,6 @@ public class Cliente {
                 saida.writeInt(selecionados.size());
                 for (String s : selecionados) saida.writeUTF(s);
                 saida.flush();
-                JOptionPane.showMessageDialog(framePrincipal, "Grupo criado: " + nomeGrupo);
             } catch (IOException ex) { ex.printStackTrace(); }
         });
 
@@ -293,12 +312,56 @@ public class Cliente {
         framePrincipal.setVisible(true);
     }
 
+    private static void mostrarPopupNotificacao(String mensagem) {
+        JWindow popup = new JWindow();
+        popup.setBackground(new Color(0, 0, 0, 0));
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createLineBorder(new Color(0, 120, 215), 2, true));
+        panel.setBackground(new Color(255, 255, 240));
+
+        JLabel label = new JLabel(mensagem, SwingConstants.CENTER);
+        
+        label.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        label.setBorder(new EmptyBorder(10, 15, 10, 15));
+        panel.add(label, BorderLayout.CENTER);
+
+        popup.add(panel);
+        popup.pack();
+
+        if (framePrincipal != null) {
+            int x = framePrincipal.getX() + (framePrincipal.getWidth() - popup.getWidth()) / 2;
+            int y = framePrincipal.getY() + (framePrincipal.getHeight() - popup.getHeight()) / 2;
+            popup.setLocation(x, y);
+        } else {
+            popup.setLocationRelativeTo(null);
+        }
+
+        final int DURATION = 4000;
+        final int FLASH_INTERVAL = 800;
+        AtomicInteger elapsedTime = new AtomicInteger(0);
+
+        Timer timer = new Timer(FLASH_INTERVAL, e -> {
+            popup.setVisible(!popup.isVisible());
+            if (elapsedTime.addAndGet(FLASH_INTERVAL) >= DURATION) {
+                ((Timer) e.getSource()).stop();
+                popup.dispose();
+            }
+        });
+        
+        popup.setVisible(true);
+        timer.start();
+    }
+
     private static void abrirChat(String key, boolean grupo) {
         if (key == null || key.isEmpty() || key.length() > 40) return;
 
+        unreadMessages.remove(key);
+        framePrincipal.repaint();
+
         if (chatsAbertos.containsKey(key)) {
-            chatsAbertos.get(key).setVisible(true);
-            notificacoesPendentes.put(key, false);
+            JFrame frame = chatsAbertos.get(key);
+            frame.setVisible(true);
             return;
         }
 
@@ -324,13 +387,11 @@ public class Cliente {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.setBackground(new Color(245, 245, 255));
 
-        // Cria a barra para escrever a mensagem
         JTextField campoMensagem = new JTextField();
         campoMensagem.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         campoMensagem.setBorder(BorderFactory.createLineBorder(new Color(180, 180, 220), 1));
         campoMensagem.setPreferredSize(new Dimension(0, 32));
 
-        // Adiciona a barra de mensagem ao painel, na posição CENTER
         panel.add(campoMensagem, BorderLayout.CENTER);
 
         JButton botaoEnviar = criarBotao("Enviar", new Color(220, 235, 255));
@@ -343,7 +404,6 @@ public class Cliente {
         botoes.add(botaoArquivo);
         botoes.add(botaoSair);
 
-        // Adiciona os botões ao painel, na posição EAST
         panel.add(botoes, BorderLayout.EAST);
 
         chatFrame.add(panel, BorderLayout.SOUTH);
@@ -414,20 +474,37 @@ public class Cliente {
         chatFrame.setLocationRelativeTo(null);
         chatFrame.setVisible(true);
         chatsAbertos.put(key, chatFrame);
-        notificacoesPendentes.put(key, false);
+    }
+
+    private static class UnreadMessageRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+            Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            String key = value.toString();
+            String groupKey = "GRUPO:" + key;
+
+            if (unreadMessages.contains(key) || unreadMessages.contains(groupKey)) {
+                if (!isSelected) {
+                    c.setBackground(new Color(200, 255, 200));
+                }
+            } else {
+                c.setBackground(list.getBackground());
+            }
+            return c;
+        }
     }
 
     private static JButton criarBotao(String texto, Color corFundo) {
         JButton botao = new JButton(texto);
-        botao.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        botao.setBackground(corFundo);
-        botao.setForeground(Color.DARK_GRAY);
+        botao.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         botao.setFocusPainted(false);
+        botao.setForeground(Color.DARK_GRAY);
+        botao.setBackground(corFundo);
+        botao.setFont(new Font("Segoe UI", Font.PLAIN, 13));
         botao.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(new Color(180, 180, 220), 1, true),
             BorderFactory.createEmptyBorder(4, 12, 4, 12)
         ));
-        botao.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return botao;
     }
 }
