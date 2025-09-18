@@ -195,6 +195,9 @@ public class Servidor {
         Set<String> membros = grupos.get(grupo);
         if (membros != null) {
             for (String m : membros) {
+                if (m.equals(remetente)) {
+                    continue;
+                }
                 Socket socketDest = clientes.get(m);
                 if (socketDest != null) {
                     DataOutputStream saidaDest = new DataOutputStream(socketDest.getOutputStream());
